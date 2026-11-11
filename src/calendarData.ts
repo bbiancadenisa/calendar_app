@@ -7,6 +7,7 @@ export type CalendarDay = {
 export type CalendarEvent = {
   id: string
   title: string
+  description?: string
   date: string
   startTime: string
   endTime: string

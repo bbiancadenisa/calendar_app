@@ -3,101 +3,12 @@ import type { KeyboardEvent } from 'react'
 import { useMediaQuery } from 'react-responsive'
 import './CalendarPage.css'
 import { calendarData } from './calendarData'
-import type { CalendarDay } from './calendarData'
-
-const weekdays = [
-  { short: 'Sun', full: 'Sunday' },
-  { short: 'Mon', full: 'Monday' },
-  { short: 'Tue', full: 'Tuesday' },
-  { short: 'Wed', full: 'Wednesday' },
-  { short: 'Thu', full: 'Thursday' },
-  { short: 'Fri', full: 'Friday' },
-  { short: 'Sat', full: 'Saturday' },
-]
-
-type CalendarCell = CalendarDay & { isCurrentMonth: boolean }
-
-const monthIndex = calendarData.month.number - 1
-const firstWeekdayIndex = new Date(
-  Date.UTC(calendarData.month.year, monthIndex, 1),
-).getUTCDay()
-const trailingDayCount =
-  (7 - ((firstWeekdayIndex + calendarData.days.length) % 7)) % 7
-const shortWeekdayFormatter = new Intl.DateTimeFormat('en-US', {
-  weekday: 'short',
-  timeZone: 'UTC',
-})
-const fullDateFormatter = new Intl.DateTimeFormat('en-US', {
-  weekday: 'long',
-  month: 'long',
-  day: 'numeric',
-  year: 'numeric',
-  timeZone: 'UTC',
-})
-
-const createCalendarCell = (date: Date): CalendarCell => ({
-  date: date.toISOString().slice(0, 10),
-  dayOfMonth: date.getUTCDate(),
-  weekday: shortWeekdayFormatter.format(date),
-  isCurrentMonth:
-    date.getUTCFullYear() === calendarData.month.year &&
-    date.getUTCMonth() === monthIndex,
-})
-
-const leadingDays = Array.from({ length: firstWeekdayIndex }, (_, index) =>
-  createCalendarCell(
-    new Date(
-      Date.UTC(
-        calendarData.month.year,
-        monthIndex,
-        index - firstWeekdayIndex + 1,
-      ),
-    ),
-  ),
-)
-const currentMonthDays = calendarData.days.map((day) => ({
-  ...day,
-  isCurrentMonth: true,
-}))
-const trailingDays = Array.from({ length: trailingDayCount }, (_, index) =>
-  createCalendarCell(
-    new Date(
-      Date.UTC(
-        calendarData.month.year,
-        monthIndex,
-        calendarData.days.length + index + 1,
-      ),
-    ),
-  ),
-)
-const calendarCells = [...leadingDays, ...currentMonthDays, ...trailingDays]
-const calendarWeeks = Array.from(
-  { length: calendarCells.length / 7 },
-  (_, index) => calendarCells.slice(index * 7, index * 7 + 7),
-)
-const eventsByDate = new Map(
-  calendarData.events.map((calendarEvent) => [calendarEvent.date, calendarEvent]),
-)
-
-const formatAccessibleDate = (date: string) =>
-  fullDateFormatter.format(new Date(`${date}T00:00:00.000Z`))
-
-const getDayAccessibleName = (day: CalendarDay) => {
-  const event = eventsByDate.get(day.date)
-
-  return event
-    ? `${formatAccessibleDate(day.date)}. ${event.title}`
-    : formatAccessibleDate(day.date)
-}
-
-const CalendarHeader = () => (
-  <header className="calendar-header">
-    <h1 className="calendar-title">Calendar</h1>
-    <button className="add-event-button" type="button">
-      Add event
-    </button>
-  </header>
-)
+import type { CalendarDay, CalendarEvent } from './calendarData'
+import CalendarHeader from './CalendarHeader'
+import CalendarEvents from './CalendarEvents'
+import EventPopup from './EventPopup'
+import type { EventPopupState } from './EventPopup'
+import { calendarWeeks, firstWeekdayIndex, formatAccessibleDate, weekdays } from './calendarUtils'
 
 const CalendarPage = () => {
   const isNarrowViewport = useMediaQuery({ maxWidth: 480 })
@@ -105,10 +16,36 @@ const CalendarPage = () => {
   const isListViewport = isNarrowViewport || isShortViewport
   const [focusedDate, setFocusedDate] = useState(calendarData.days[0]?.date ?? '')
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  const [events, setEvents] = useState(calendarData.events)
+  const [popup, setPopup] = useState<EventPopupState | null>(null)
+  const popupOpener = useRef<HTMLElement | null>(null)
   const [announcement, setAnnouncement] = useState(
     `Showing ${calendarData.month.name} ${calendarData.month.year}`,
   )
   const dayElements = useRef(new Map<string, HTMLElement>())
+
+  const getEventsForDate = (date: string) => events.filter((event) => event.date === date)
+    .sort((first, second) => first.startTime.localeCompare(second.startTime))
+
+  const getDayAccessibleName = (day: CalendarDay) =>
+    [formatAccessibleDate(day.date), ...getEventsForDate(day.date).map((event) => event.title)].join('. ')
+
+  const openPopup = (event: CalendarEvent, mode: EventPopupState['mode']) => {
+    popupOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setPopup({ event, mode })
+  }
+
+  const closePopup = () => {
+    setPopup(null)
+    if (popupOpener.current?.isConnected) popupOpener.current.focus()
+    else dayElements.current.get(focusedDate)?.focus()
+  }
+
+  const addEvent = () => openPopup({
+    id: crypto.randomUUID(), title: '', description: '',
+    date: selectedDate ?? calendarData.days[0].date,
+    startTime: '09:00', endTime: '09:30',
+  }, 'create')
 
   const selectDate = (day: CalendarDay) => {
     setSelectedDate(day.date)
@@ -128,6 +65,7 @@ const CalendarPage = () => {
     event: KeyboardEvent<HTMLElement>,
     dayIndex: number,
   ) => {
+    if (event.target !== event.currentTarget) return
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
       selectDate(calendarData.days[dayIndex])
@@ -167,18 +105,16 @@ const CalendarPage = () => {
     <div className="calendar-page">
       {isNarrowViewport || isShortViewport ? (
         <div className="calendar-container">
-          <CalendarHeader />
-          <div className="calendar-list-days">
+          <CalendarHeader onAdd={addEvent} />
+          <div className="calendar-list-days" role="list" aria-label={`${calendarData.month.name} ${calendarData.month.year}`}>
             {calendarData.days.map((day, dayIndex) => {
-              const event = eventsByDate.get(day.date)
-
               return (
                 <div
                   className="calendar-list-day"
                   key={day.date}
-                  role="option"
+                  role="listitem"
                   aria-label={getDayAccessibleName(day)}
-                  aria-selected={selectedDate === day.date}
+                  data-selected={selectedDate === day.date}
                   aria-posinset={dayIndex + 1}
                   aria-setsize={calendarData.days.length}
                   tabIndex={focusedDate === day.date ? 0 : -1}
@@ -194,9 +130,11 @@ const CalendarPage = () => {
                     <span className="calendar-list-weekday">{day.weekday}</span>
                     <span>{day.dayOfMonth}</span>
                   </span>
-                  {event && (
-                    <span className="calendar-list-event">{event.title}</span>
-                  )}
+                  <CalendarEvents
+                    events={getEventsForDate(day.date)}
+                    className="calendar-list-event"
+                    onOpen={(event) => openPopup(event, 'view')}
+                  />
                 </div>
               )
             })}
@@ -204,7 +142,7 @@ const CalendarPage = () => {
         </div>
       ) : (
         <div className="calendar-container">
-          <CalendarHeader />
+          <CalendarHeader onAdd={addEvent} />
           <div
             className="calendar-days"
             role="grid"
@@ -243,7 +181,6 @@ const CalendarPage = () => {
                   }
 
                   const dayIndex = cell.dayOfMonth - 1
-                  const event = eventsByDate.get(cell.date)
 
                   return (
                     <div
@@ -264,9 +201,11 @@ const CalendarPage = () => {
                       onClick={() => selectDate(cell)}
                     >
                       <span>{cell.dayOfMonth}</span>
-                      {event && (
-                        <span className="calendar-event">{event.title}</span>
-                      )}
+                      <CalendarEvents
+                        events={getEventsForDate(cell.date)}
+                        className="calendar-event"
+                        onOpen={(event) => openPopup(event, 'view')}
+                      />
                     </div>
                   )
                 })}
@@ -275,6 +214,18 @@ const CalendarPage = () => {
           </div>
         </div>
       )}
+      {popup && <EventPopup popup={popup} onClose={closePopup}
+        onSave={(savedEvent) => {
+          setEvents((current) => popup.mode === 'create' ? [...current, savedEvent]
+            : current.map((event) => event.id === savedEvent.id ? savedEvent : event))
+          setAnnouncement(`${savedEvent.title} ${popup.mode === 'create' ? 'created' : 'updated'}.`)
+          closePopup()
+        }}
+        onDelete={(deletedEvent) => {
+          setEvents((current) => current.filter((event) => event.id !== deletedEvent.id))
+          setAnnouncement(`${deletedEvent.title} deleted.`)
+          closePopup()
+        }} />}
       <div
         className="calendar-live-region"
         id="calendar-announcement"
